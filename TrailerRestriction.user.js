@@ -7,8 +7,8 @@
 // @match        https://trans-logistics-eu.amazon.com/*
 // @grant        none
 // @run-at       document-idle
-// @downloadURL  https://raw.githubusercontent.com/thecrought/trailermove/refs/heads/main/Trailer%20restriction.user.js
-// @updateURL    https://raw.githubusercontent.com/thecrought/trailermove/refs/heads/main/Trailer%20restriction.user.js
+// @downloadURL  https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
+// @updateURL    https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
 // ==/UserScript==
 
 (function () {
