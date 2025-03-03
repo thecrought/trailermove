@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         NICE, NICE, NICE, NICE TEST, TEST
+// @name         Trailer move restriction
 // @namespace    http://tampermonkey.net/
-// @version      0.9
+// @version      1.0
 // @description  Restrict bays, change Save button color, and update text based on restrictions
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
@@ -19,7 +19,7 @@
     // Function to create the credits div
     function createCreditsDiv() {
         const creditsDiv = document.createElement('div');
-        creditsDiv.innerHTML = 'TEST <span style="font-weight: bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color: black; text-decoration: underline; font-weight: bold;">Valdemar Iliev (valdemai) v0.0.7</a></span>';
+        creditsDiv.innerHTML = 'Improved YMS Script by <span style="font-weight: bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color: black; text-decoration: underline; font-weight: bold;">Valdemar Iliev (valdemai) v0.0.7</a></span>';
         creditsDiv.style.display = 'inline-block';
         creditsDiv.style.marginLeft = '10px';
         creditsDiv.style.color = 'black';
