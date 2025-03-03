@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trailer move restriction
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      0.10
 // @description  Restrict bays, change Save button color, and update text based on restrictions
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
