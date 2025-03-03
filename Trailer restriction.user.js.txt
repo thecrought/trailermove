@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NICE, NICE, NICE, NICE TEST, TEST
 // @namespace    http://tampermonkey.net/
-// @version      0.8
+// @version      0.9
 // @description  Restrict bays, change Save button color, and update text based on restrictions
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
