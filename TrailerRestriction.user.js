@@ -66,7 +66,7 @@
         injectCredits(); // Re-inject credits if <t> changes or reappears
     });
 
-    // Start observing the body, but we'll narrow it to h1#title once found
+    // Start observing the body, but will narrow it to h1#title once found
     const startObserving = () => {
         const titleHeader = document.querySelector('h1#title');
         if (titleHeader) {
@@ -82,7 +82,7 @@
     startObserving();
 
     // Define restricted bays and handle button restrictions
-    const restrictedBays = ['IB14-SD', 'IB19-SD', 'IB20-SD', 'IB21-SD', 'IB22-SD'];
+    const restrictedBays = ['DD14', 'DD19', 'DD20', 'DD21', 'DD22'];
 
     document.body.addEventListener('click', function (event) {
         if (event.target && event.target.matches('.request-movement.highlight')) {
