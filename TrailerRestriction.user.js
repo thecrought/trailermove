@@ -1,14 +1,12 @@
 // ==UserScript==
-// @name         Trailer move restriction (fast + safe)
+// @name         Trailer move restriction (fast + stable)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
-// @description  Restrict moving Double Decker trailers to small bay doors (optimized to avoid Firefox overload)
+// @version      1.2.0
+// @description  Restrict moving Double Decker trailers to small bay doors (optimized + stable on SPA re-renders)
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
 // @grant        none
 // @run-at       document-idle
-// @downloadURL  https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
-// @updateURL    https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
 // ==/UserScript==
 
 (function () {
@@ -19,7 +17,6 @@
 
   const YARD_HASH = '#/yard';
   const DOUBLE_DECKER_MARKER_TEXT = 'Double Decker Trailer';
-
   const RESTRICTED_BAYS = new Set(['DD14', 'DD19', 'DD20', 'DD21', 'DD22']);
 
   const SAVE_LABEL = 'Save';
@@ -34,12 +31,60 @@
     if (document.getElementById('tm-dd-style')) return;
     const style = document.createElement('style');
     style.id = 'tm-dd-style';
-    style.textContent = `
-      .${BLOCKED_CLASS} { background: red !important; color: white !important; }
-    `;
+    style.textContent = `.${BLOCKED_CLASS}{background:red!important;color:white!important;}`;
     document.head.appendChild(style);
   }
 
+  // =========================
+  // CREDITS (stable)
+  // =========================
+  function createCreditsDiv() {
+    const creditsDiv = document.createElement('div');
+    creditsDiv.id = 'custom-credits-div';
+    creditsDiv.innerHTML =
+      'Improved YMS Script by <span style="font-weight:bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color:black;text-decoration:underline;font-weight:bold;">Valdemar Iliev (valdemai) v1.2.0</a></span>';
+    creditsDiv.style.display = 'inline-block';
+    creditsDiv.style.marginLeft = '10px';
+    creditsDiv.style.color = 'black';
+    creditsDiv.style.fontSize = '12px';
+    creditsDiv.style.padding = '2px 5px';
+    creditsDiv.style.borderRadius = '3px';
+    creditsDiv.style.opacity = '0.9';
+    return creditsDiv;
+  }
+
+  function injectCredits() {
+    if (!isOnYardPage()) return;
+
+    const titleHeader = document.querySelector('h1#title');
+    if (!titleHeader) return;
+
+    const yardManagementTag = titleHeader.querySelector('t');
+    if (!yardManagementTag) return;
+
+    if (!yardManagementTag.querySelector('#custom-credits-div')) {
+      yardManagementTag.appendChild(createCreditsDiv());
+      log('Credits injected.');
+    }
+  }
+
+  // Observe ONLY the title area (tiny, safe), so credits reappear after re-render
+  function startCreditsObserver() {
+    const tryStart = () => {
+      const titleHeader = document.querySelector('h1#title');
+      if (!titleHeader) return setTimeout(tryStart, 500);
+
+      const obs = new MutationObserver(() => injectCredits());
+      obs.observe(titleHeader, { childList: true, subtree: true });
+      injectCredits();
+      log('Credits observer started on h1#title.');
+    };
+    tryStart();
+  }
+
+  // =========================
+  // RESTRICTION (stable)
+  // =========================
   function normalizeBay(str) {
     if (!str) return '';
     const s = String(str).trim();
@@ -48,16 +93,16 @@
   }
 
   function getSelectedBay(selectEl) {
-    if (!selectEl) return '';
-    const opt = selectEl.options?.[selectEl.selectedIndex];
-    const v = normalizeBay(opt?.value || '');
-    if (v) return v;
+    const opt = selectEl?.options?.[selectEl.selectedIndex];
+    const fromValue = normalizeBay(opt?.value || '');
+    if (fromValue) return fromValue;
     return normalizeBay(opt?.textContent || selectEl.value || '');
   }
 
   function findMovementDialogRoot() {
-    // Look for a dialog/modal that contains the destination select
-    const containers = document.querySelectorAll('[role="dialog"], .modal, .modal-dialog, .modal-content, .dialog, .popup');
+    const containers = document.querySelectorAll(
+      '[role="dialog"], .modal, .modal-dialog, .modal-content, .dialog, .popup'
+    );
     for (const el of containers) {
       if (el.querySelector('select[ng-model="destination"]')) return el;
     }
@@ -95,44 +140,6 @@
     btn.classList.add(BLOCKED_CLASS);
   }
 
-  // --- Credits injection (kept lightweight)
-  function createCreditsDiv() {
-    const creditsDiv = document.createElement('div');
-    creditsDiv.innerHTML =
-      'Improved YMS Script by <span style="font-weight: bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color: black; text-decoration: underline; font-weight: bold;">Valdemar Iliev (valdemai) v1.1.0</a></span>';
-    creditsDiv.style.display = 'inline-block';
-    creditsDiv.style.marginLeft = '10px';
-    creditsDiv.style.color = 'black';
-    creditsDiv.style.fontSize = '12px';
-    creditsDiv.style.padding = '2px 5px';
-    creditsDiv.style.borderRadius = '3px';
-    creditsDiv.style.opacity = '0.9';
-    creditsDiv.id = 'custom-credits-div';
-    return creditsDiv;
-  }
-
-  function injectCreditsOnceWhenAvailable() {
-    if (!isOnYardPage()) return;
-    const titleHeader = document.querySelector('h1#title');
-    if (!titleHeader) return;
-    const yardManagementTag = titleHeader.querySelector('t');
-    if (!yardManagementTag) return;
-
-    if (!yardManagementTag.querySelector('#custom-credits-div')) {
-      yardManagementTag.appendChild(createCreditsDiv());
-      log('Credits injected.');
-    }
-  }
-
-  // Try a few times instead of observing entire DOM
-  function creditsRetryLoop(attempts = 20) {
-    if (attempts <= 0) return;
-    injectCreditsOnceWhenAvailable();
-    if (document.querySelector('#custom-credits-div')) return;
-    setTimeout(() => creditsRetryLoop(attempts - 1), 500);
-  }
-
-  // --- Core: bind restrictions to the modal (no global observer)
   function bindRestrictions(dialogRoot) {
     if (!dialogRoot || dialogRoot.dataset.tmDdBound === '1') return;
 
@@ -143,13 +150,12 @@
     dialogRoot.dataset.tmDdBound = '1';
     storeOriginal(saveButton);
 
-    // Cache “is double decker” ONCE per modal open
+    // Cache trailer type ONCE per modal instance
     const dd = (dialogRoot.innerText || dialogRoot.textContent || '').includes(DOUBLE_DECKER_MARKER_TEXT);
 
     const applyRules = () => {
       const bay = getSelectedBay(destinationSelect);
       const restricted = RESTRICTED_BAYS.has(bay);
-
       log('applyRules', { dd, bay, restricted });
 
       if (dd && restricted) block(saveButton);
@@ -161,7 +167,7 @@
     log('Restrictions bound.');
   }
 
-  // Start watching only after clicking request movement, and stop quickly
+  // Watch for the dialog ONLY after click, stop quickly
   function watchForDialogOnce() {
     let stopped = false;
     let scheduled = false;
@@ -177,7 +183,6 @@
     const check = () => {
       if (stopped) return;
       scheduled = false;
-
       const dialog = findMovementDialogRoot();
       if (dialog) {
         bindRestrictions(dialog);
@@ -188,31 +193,30 @@
     const observer = new MutationObserver(() => {
       if (stopped || scheduled) return;
       scheduled = true;
-      // Debounce bursts of mutations into one check
-      setTimeout(check, 50);
+      setTimeout(check, 50); // debounce
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-
-    // Also do an immediate check (sometimes modal is already in DOM)
-    check();
-
-    // Safety: stop after 5 seconds even if modal not found
-    const timeoutId = setTimeout(stop, 5000);
+    check(); // immediate attempt
+    const timeoutId = setTimeout(stop, 6000); // safety stop
   }
 
-  // Hook only the movement button click
+  // IMPORTANT FIX: use closest() so clicks on inner elements still count
   document.body.addEventListener('click', (event) => {
     if (!isOnYardPage()) return;
 
-    const target = event.target;
-    if (target && target.matches && target.matches('.request-movement.highlight')) {
+    const btn = event.target?.closest?.('.request-movement.highlight');
+    if (btn) {
       log('Movement clicked; watching for dialog...');
       watchForDialogOnce();
     }
   });
 
-  // Init
+  // =========================
+  // INIT
+  // =========================
   injectStyleOnce();
-  creditsRetryLoop();
+  startCreditsObserver();
+  injectCredits();
+
 })();
