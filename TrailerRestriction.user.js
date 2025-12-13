@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Trailer move restriction (fast + stable)
+// @name         Trailer move restriction (fast + prefix bays + reliable DD detect)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.0
-// @description  Restrict moving Double Decker trailers to small bay doors (optimized + stable on SPA re-renders)
+// @version      1.3.0
+// @description  Restrict moving Double Decker (VD) trailers to small bay doors (fast + stable)
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
 // @grant        none
@@ -16,8 +16,18 @@
   const log = (...a) => DEBUG && console.log('[TM Restrict]', ...a);
 
   const YARD_HASH = '#/yard';
-  const DOUBLE_DECKER_MARKER_TEXT = 'Double Decker Trailer';
-  const RESTRICTED_BAYS = new Set(['DD14', 'DD19', 'DD20', 'DD21', 'DD22']);
+
+  // Trailer type markers (add more here if your UI uses different wording)
+  const TRAILER_TYPE_MARKERS = [
+    'Double Decker Trailer',
+    'Double Decker',
+    'VD Trailer',
+    'VD trailer',
+    'VD'
+  ];
+
+  // Restrict any destination that STARTS with these (e.g., DD19, DD19SD, DD19-XX, DD19 something)
+  const RESTRICTED_BAY_PREFIXES = ['DD14', 'DD19', 'DD20', 'DD21', 'DD22'];
 
   const SAVE_LABEL = 'Save';
   const BLOCKED_LABEL = 'DO NOT MOVE';
@@ -42,7 +52,7 @@
     const creditsDiv = document.createElement('div');
     creditsDiv.id = 'custom-credits-div';
     creditsDiv.innerHTML =
-      'Improved YMS Script by <span style="font-weight:bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color:black;text-decoration:underline;font-weight:bold;">Valdemar Iliev (valdemai) v1.2.0</a></span>';
+      'Improved YMS Script by <span style="font-weight:bold;"><a href="https://fclm-portal.amazon.com/employee/timeDetails?warehouseId=LCY2&employeeId=102679647" style="color:black;text-decoration:underline;font-weight:bold;">Valdemar Iliev (valdemai) v1.3.0</a></span>';
     creditsDiv.style.display = 'inline-block';
     creditsDiv.style.marginLeft = '10px';
     creditsDiv.style.color = 'black';
@@ -68,7 +78,6 @@
     }
   }
 
-  // Observe ONLY the title area (tiny, safe), so credits reappear after re-render
   function startCreditsObserver() {
     const tryStart = () => {
       const titleHeader = document.querySelector('h1#title');
@@ -83,20 +92,31 @@
   }
 
   // =========================
-  // RESTRICTION (stable)
+  // RESTRICTION
   // =========================
   function normalizeBay(str) {
     if (!str) return '';
-    const s = String(str).trim();
-    const token = s.split(/\s|-+/)[0];
-    return token.trim().toUpperCase();
+    return String(str).trim().toUpperCase().replace(/\s+/g, '');
   }
 
+  // Extract a “code-like” prefix from common formats:
+  // "DD19SD", "DD19-SD", "DD19 SD", "DD19SD - Door" -> "DD19SD" (no spaces)
   function getSelectedBay(selectEl) {
     const opt = selectEl?.options?.[selectEl.selectedIndex];
-    const fromValue = normalizeBay(opt?.value || '');
-    if (fromValue) return fromValue;
-    return normalizeBay(opt?.textContent || selectEl.value || '');
+    const raw = (opt?.value || opt?.textContent || selectEl?.value || '').trim();
+    if (!raw) return '';
+
+    // take left side of " - " if present
+    const left = raw.split(' - ')[0];
+    // remove spaces; keep hyphen removal too (so DD19-SD => DD19SD)
+    return normalizeBay(left).replace(/-/g, '');
+  }
+
+  function isRestrictedBay(bayCode) {
+    if (!bayCode) return false;
+    // Ensure we compare without hyphens/spaces
+    const code = normalizeBay(bayCode).replace(/-/g, '');
+    return RESTRICTED_BAY_PREFIXES.some(prefix => code.startsWith(prefix));
   }
 
   function findMovementDialogRoot() {
@@ -140,6 +160,11 @@
     btn.classList.add(BLOCKED_CLASS);
   }
 
+  function textContainsMarker(txt) {
+    if (!txt) return false;
+    return TRAILER_TYPE_MARKERS.some(m => txt.includes(m));
+  }
+
   function bindRestrictions(dialogRoot) {
     if (!dialogRoot || dialogRoot.dataset.tmDdBound === '1') return;
 
@@ -150,24 +175,33 @@
     dialogRoot.dataset.tmDdBound = '1';
     storeOriginal(saveButton);
 
-    // Cache trailer type ONCE per modal instance
-    const dd = (dialogRoot.innerText || dialogRoot.textContent || '').includes(DOUBLE_DECKER_MARKER_TEXT);
+    // Detect trailer type:
+    // 1) Try inside dialog (cheap)
+    // 2) If not found, fallback to a one-time whole-page check (still only once per popup)
+    const dialogText = dialogRoot.innerText || dialogRoot.textContent || '';
+    let isDD = textContainsMarker(dialogText);
+
+    if (!isDD) {
+      const pageText = document.body?.innerText || '';
+      isDD = textContainsMarker(pageText);
+    }
+
+    log('Trailer type detected as DD/VD:', isDD);
 
     const applyRules = () => {
       const bay = getSelectedBay(destinationSelect);
-      const restricted = RESTRICTED_BAYS.has(bay);
-      log('applyRules', { dd, bay, restricted });
+      const restricted = isRestrictedBay(bay);
 
-      if (dd && restricted) block(saveButton);
+      log('applyRules', { isDD, bay, restricted });
+
+      if (isDD && restricted) block(saveButton);
       else restore(saveButton);
     };
 
     destinationSelect.addEventListener('change', applyRules);
     applyRules(); // apply immediately
-    log('Restrictions bound.');
   }
 
-  // Watch for the dialog ONLY after click, stop quickly
   function watchForDialogOnce() {
     let stopped = false;
     let scheduled = false;
@@ -177,7 +211,6 @@
       stopped = true;
       observer.disconnect();
       clearTimeout(timeoutId);
-      log('Dialog watcher stopped.');
     };
 
     const check = () => {
@@ -193,28 +226,22 @@
     const observer = new MutationObserver(() => {
       if (stopped || scheduled) return;
       scheduled = true;
-      setTimeout(check, 50); // debounce
+      setTimeout(check, 50);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    check(); // immediate attempt
-    const timeoutId = setTimeout(stop, 6000); // safety stop
+    check();
+    const timeoutId = setTimeout(stop, 7000);
   }
 
-  // IMPORTANT FIX: use closest() so clicks on inner elements still count
+  // IMPORTANT: closest() so clicks on icon/span inside the button count
   document.body.addEventListener('click', (event) => {
     if (!isOnYardPage()) return;
-
     const btn = event.target?.closest?.('.request-movement.highlight');
-    if (btn) {
-      log('Movement clicked; watching for dialog...');
-      watchForDialogOnce();
-    }
+    if (btn) watchForDialogOnce();
   });
 
-  // =========================
   // INIT
-  // =========================
   injectStyleOnce();
   startCreditsObserver();
   injectCredits();
