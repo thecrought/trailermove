@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trailer move restriction (DEBUG) - VD DoubleDeck
 // @namespace    http://tampermonkey.net/
-// @version      1.5.0-debug
+// @version      1.6.0-debug
 // @description  Blocks moving VD* Double Deck trailers to restricted bays
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
