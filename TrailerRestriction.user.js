@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trailer move restriction (DEBUG) - VD DoubleDeck
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0-debug
+// @version      1.7.0-debug
 // @description  Blocks moving VD* Double Deck trailers to restricted bays
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
@@ -156,48 +156,35 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
   /* =========================
      TRAILER ID (VD*) DETECTION
   ========================= */
-  function extractTrailerIdFromText(text) {
-    const t = String(text || '');
+  function extractTrailerId(dialogRoot) {
+  // Try to find the Id column cell specifically
+  const cells = Array.from(dialogRoot.querySelectorAll('td'));
 
-    // Try a few common label formats first
-    const labeledPatterns = [
-      /Trailer\s*ID\s*[:#]?\s*([A-Z0-9-]+)/i,
-      /Trailer\s*[:#]?\s*([A-Z0-9-]+)/i,
-      /\bTrailer\s*Number\s*[:#]?\s*([A-Z0-9-]+)/i,
-      /\bTrailer\s*:\s*([A-Z0-9-]+)/i,
-      /\bEquipment\s*[:#]?\s*([A-Z0-9-]+)/i
-    ];
+  for (const cell of cells) {
+    const text = (cell.textContent || '').trim().toUpperCase();
 
-    for (const re of labeledPatterns) {
-      const m = t.match(re);
-      if (m && m[1]) return normalize(m[1]);
+    // Look for VD followed by numbers
+    if (/^VD\d+$/i.test(text)) {
+      return text;
     }
-
-    // Fallback: find any token starting with VD (VD1234, VD-1234, etc.)
-    const fallback = t.match(/\bVD[-\s]?[A-Z0-9]{2,}\b/i);
-    if (fallback && fallback[0]) return normalize(fallback[0]);
-
-    return '';
   }
+
+  // Fallback: search whole dialog text
+  const fallback = (dialogRoot.innerText || '').match(/\bVD\d+\b/i);
+  if (fallback) return fallback[0].toUpperCase();
+
+  return '';
+}
 
   function detectTrailerStartsWithPrefix(dialogRoot, prefix) {
-    const pfx = normalize(prefix);
+  const id = extractTrailerId(dialogRoot);
+  const result = id.startsWith(prefix.toUpperCase());
 
-    const dialogText = dialogRoot.innerText || '';
-    let id = extractTrailerIdFromText(dialogText);
+  log('Trailer ID detected:', id || '(none)');
+  log(`Trailer starts with ${prefix}?`, result);
 
-    log('Trailer ID from dialog:', id || '(none)');
-
-    if (!id) {
-      const pageText = document.body.innerText || '';
-      id = extractTrailerIdFromText(pageText);
-      log('Fallback Trailer ID from page:', id || '(none)');
-    }
-
-    const result = id.startsWith(pfx);
-    log(`Trailer starts with ${pfx}?`, id || '(none)', result);
-    return { result, id };
-  }
+  return { result, id };
+}
 
   /* =========================
      CORE BINDING
