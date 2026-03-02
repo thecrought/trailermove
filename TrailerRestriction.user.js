@@ -1,49 +1,52 @@
 // ==UserScript==
-// @name         Trailer move restriction (DEBUG) - VD DoubleDeck
+// @name         Trailer move restriction - Block SD + Low-height confirm + VS exemptions
 // @namespace    http://tampermonkey.net/
-// @version      1.7.0-debug
-// @description  Blocks moving VD* Double Deck trailers to restricted bays
+// @version      2.4.0
+// @description  Blocks VD* Double Deck moves to low-height SD bays; requires confirmation for other trailers into low-height bays; exempts VS40/VS42/VS43/VS44 from any restrictions.
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
 // @grant        none
 // @run-at       document-idle
+//
+// @downloadURL  https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
+// @updateURL    https://raw.githubusercontent.com/thecrought/trailermove/main/TrailerRestriction.user.js
+// @homepageURL  https://github.com/thecrought/trailermove
 // ==/UserScript==
 
 (function () {
   'use strict';
 
   /* =========================
-     DEBUG
+     CONFIG
   ========================= */
-  const DEBUG = true;
-  const log = (...a) => console.log('%c[TM DEBUG]', 'color:#b000ff;font-weight:bold;', ...a);
+  const YARD_HASH = '#/yard';
 
-/* =========================
-   CONFIG
-========================= */
-const YARD_HASH = '#/yard';
+  const TRAILER_TYPE_MARKERS = [
+    'Double Deck Trailer',
+    'Double Deck',
+    'DoubleDeck',
+    'Double Decker Trailer'
+  ];
 
-const TRAILER_TYPE_MARKERS = [
-  'Double Deck Trailer',
-  'Double Deck',
-  'DoubleDeck'
-];
+  // Low height bays (< 4.3m)
+  const LOW_HEIGHT_BAYS = ['DD14SD', 'DD19SD', 'DD20SD', 'DD21SD', 'DD22SD'];
 
-// These exact bays are completely restricted
-const RESTRICTED_BAYS = [
-  'DD14SD',
-  'DD19SD',
-  'DD20SD',
-  'DD21SD',
-  'DD22SD'
-];
+  // Block rule: only for VD* double decks
+  const TRAILER_ID_PREFIX = 'VD';
 
-// Only restrict trailers whose ID starts with this prefix
-const TRAILER_ID_PREFIX = 'VD';
+  // Exempt trailers: no restrictions/warnings apply (proceed as normal)
+  const EXEMPT_TRAILER_PREFIXES = ['VS40', 'VS42', 'VS43', 'VS44'];
 
-const SAVE_LABEL = 'Save';
-const BLOCKED_LABEL = 'DO NOT MOVE';
-const BLOCKED_CLASS = 'tm-dd-blocked-save';
+  // Visual classes
+  const BLOCKED_CLASS = 'tm-dd-blocked-save'; // red
+  const WARN_CLASS = 'tm-move-warn-save';     // amber
+
+  const BLOCKED_LABEL = 'DO NOT MOVE';
+  const WARN_LABEL = 'CONFIRM MOVE';
+
+  // Styled confirm settings
+  const HEIGHT_LIMIT_TEXT = '4.3 m';
+  const HEIGHT_LIMIT_FT_TEXT = '14.1 ft'; // 4.3m ≈ 14.1ft
 
   function isOnYardPage() {
     return String(location.hash || '').includes(YARD_HASH);
@@ -56,12 +59,192 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
     if (document.getElementById('tm-dd-style')) return;
     const style = document.createElement('style');
     style.id = 'tm-dd-style';
-    style.textContent = `.${BLOCKED_CLASS}{background:red!important;color:white!important;}`;
+    style.textContent = `
+      .${BLOCKED_CLASS}{
+        background:#d40000!important;
+        color:#fff!important;
+        border-color:#a30000!important;
+      }
+      .${BLOCKED_CLASS}:hover{ filter:brightness(0.97); }
+
+      .${WARN_CLASS}{
+        background:#ffbf00!important;
+        color:#111!important;
+        border-color:#c69200!important;
+      }
+      .${WARN_CLASS}:hover{ filter:brightness(0.97); }
+
+      /* ===== Styled modal ===== */
+      .tm-modal-backdrop{
+        position:fixed; inset:0;
+        background:rgba(0,0,0,.55);
+        display:flex; align-items:center; justify-content:center;
+        z-index:999999;
+        padding:16px;
+      }
+      .tm-modal{
+        width:min(560px, 96vw);
+        background:#fff;
+        border-radius:18px;
+        box-shadow:0 24px 70px rgba(0,0,0,.38);
+        overflow:visible;
+        font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      }
+
+      /* Centered header text */
+      .tm-modal-header{
+        padding:20px 20px 8px;
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        text-align:center;
+        gap:8px;
+      }
+      .tm-modal-icon{
+        width:40px;
+        height:40px;
+        border-radius:12px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        background:rgba(255, 191, 0, .25);
+        font-size:18px;
+      }
+      .tm-modal-headtext{
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        text-align:center;
+        gap:6px;
+      }
+      .tm-modal-title{
+        margin:0;
+        font-size:16px;
+        font-weight:700;
+        color:#111;
+      }
+      .tm-modal-sub{
+        margin:0;
+        font-size:13px;
+        color:rgba(0,0,0,.75);
+        line-height:1.4;
+      }
+      .tm-red{
+        color:#d40000;
+        font-weight:700;
+      }
+
+      /* Badge: red, NO shadow */
+      .tm-badge-wrap{
+        display:flex;
+        justify-content:center;
+        padding:2px 20px 12px;
+      }
+      .tm-badge{
+        display:inline-flex;
+        align-items:center;
+        gap:10px;
+        padding:9px 14px;
+        border-radius:999px;
+        background:#d40000;
+        color:#fff;
+        font-weight:800;
+        letter-spacing:.2px;
+        width:fit-content;
+        box-shadow:none;
+      }
+      .tm-badge .tm-badge-big{
+        font-size:18px;
+        letter-spacing:.3px;
+        font-weight:800;
+      }
+      .tm-badge .tm-badge-small{
+        font-size:12px;
+        opacity:.95;
+        font-weight:700;
+      }
+
+      .tm-modal-body{
+        padding:0 20px 16px;
+      }
+      .tm-info{
+        background:rgba(0,0,0,.03);
+        border:1px solid rgba(0,0,0,.08);
+        border-radius:14px;
+        padding:14px 14px;
+        font-size:13px;
+        color:#111;
+      }
+      .tm-info strong{ font-weight:700; }
+      .tm-info-row{
+        display:flex;
+        justify-content:space-between;
+        gap:12px;
+        margin-top:10px;
+        font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size:12.5px;
+        color:rgba(0,0,0,.78);
+      }
+      .tm-info-row span:last-child{
+        font-weight:700;
+        color:#111;
+      }
+
+      /* Footer and buttons */
+      .tm-modal-footer{
+        padding:14px 20px 22px;
+        display:flex;
+        justify-content:center;
+        gap:14px;
+        border-top:1px solid rgba(0,0,0,.08);
+        background:rgba(0,0,0,.02);
+        overflow:visible;
+      }
+
+      .tm-btn{
+        height:32px;
+        padding:0 16px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        border-radius:6px;
+        font-size:13px;
+        font-weight:500;
+        line-height:1;
+        cursor:pointer;
+        min-width:92px;
+        box-sizing:border-box;
+        background-clip:padding-box;
+        transition:box-shadow .12s ease, outline-color .12s ease, background .12s ease, border-color .12s ease;
+      }
+
+      .tm-btn-cancel{
+        background:#fff;
+        color:#1673d6;
+        border:1px solid #1673d6;
+      }
+      .tm-btn-cancel:hover{
+        outline:2px solid rgba(22,115,214,.20);
+        outline-offset:2px;
+        box-shadow:0 2px 6px rgba(0,0,0,.08);
+      }
+
+      .tm-btn-proceed{
+        background:#1673d6;
+        color:#fff;
+        border:1px solid #1673d6;
+      }
+      .tm-btn-proceed:hover{
+        background:#1467bf;
+        border-color:#1467bf;
+        box-shadow:0 2px 6px rgba(0,0,0,.10);
+      }
+    `;
     document.head.appendChild(style);
   }
 
   /* =========================
-     BAY PARSING
+     HELPERS
   ========================= */
   function normalize(str) {
     return String(str || '')
@@ -70,18 +253,134 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
       .replace(/-/g, '');
   }
 
-  function getSelectedBay(selectEl) {
-    const opt = selectEl?.options?.[selectEl.selectedIndex];
-    const raw = opt?.value || opt?.textContent || selectEl?.value || '';
-    const cleaned = normalize(raw.split(' - ')[0]);
-    log('Selected bay raw:', raw, '→ cleaned:', cleaned);
-    return cleaned;
+  function escapeHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
-  function isRestrictedBay(bay) {
-    const result = RESTRICTED_BAYS.includes(bay);
-      log('Is restricted bay?', bay, result);
-      return result;
+  function extractBayNumber(bay) {
+    const m = String(bay || '').match(/\bDD(\d+)\s*SD\b/i);
+    return m?.[1] || '';
+  }
+
+  function isExemptTrailer(trailerId) {
+    const id = String(trailerId || '').toUpperCase();
+    return EXEMPT_TRAILER_PREFIXES.some(p => id.startsWith(p));
+  }
+
+  /* =========================
+     CUSTOM CONFIRM MODAL
+  ========================= */
+  let tmModalOpen = false;
+
+  function showHeightConfirmModal({ trailer, bay }) {
+    return new Promise((resolve) => {
+      if (tmModalOpen) return resolve(false);
+      tmModalOpen = true;
+
+      const bayNum = extractBayNumber(bay);
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'tm-modal-backdrop';
+      backdrop.setAttribute('role', 'dialog');
+      backdrop.setAttribute('aria-modal', 'true');
+
+      const modal = document.createElement('div');
+      modal.className = 'tm-modal';
+
+      modal.innerHTML = `
+        <div class="tm-modal-header">
+          <div class="tm-modal-icon">⚠️</div>
+          <div class="tm-modal-headtext">
+            <h3 class="tm-modal-title">Low-height bay confirmation</h3>
+            <p class="tm-modal-sub">
+              You selected a <span class="tm-red">low-height bay</span>.<br/>
+              Verify trailer height before proceeding.
+            </p>
+          </div>
+        </div>
+
+        <div class="tm-badge-wrap">
+          <div class="tm-badge">
+            <span class="tm-badge-small">MAX HEIGHT</span>
+            <span class="tm-badge-big">${HEIGHT_LIMIT_TEXT}</span>
+            <span class="tm-badge-small">(${HEIGHT_LIMIT_FT_TEXT})</span>
+            ${bayNum ? `<span class="tm-badge-small">• Bay ${escapeHtml(bayNum)}</span>` : ''}
+          </div>
+        </div>
+
+        <div class="tm-modal-body">
+          <div class="tm-info">
+            <div>
+              <strong>Before you proceed:</strong>
+              confirm the trailer you are moving is <strong>lower than ${HEIGHT_LIMIT_TEXT}</strong>.
+            </div>
+
+            <div class="tm-info-row"><span>Trailer</span><span>${escapeHtml(trailer || '(unknown)')}</span></div>
+            <div class="tm-info-row"><span>Destination</span><span>${escapeHtml(bay || '(none)')}</span></div>
+          </div>
+        </div>
+
+        <div class="tm-modal-footer">
+          <button class="tm-btn tm-btn-cancel" id="tm-cancel">Cancel</button>
+          <button class="tm-btn tm-btn-proceed" id="tm-proceed">Proceed</button>
+        </div>
+      `;
+
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+
+      const btnCancel = modal.querySelector('#tm-cancel');
+      const btnProceed = modal.querySelector('#tm-proceed');
+
+      const cleanup = (result) => {
+        tmModalOpen = false;
+        backdrop.remove();
+        resolve(result);
+      };
+
+      btnCancel?.addEventListener('click', () => cleanup(false));
+      btnProceed?.addEventListener('click', () => cleanup(true));
+
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) cleanup(false);
+      });
+
+      const onKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          document.removeEventListener('keydown', onKeyDown, true);
+          cleanup(false);
+        }
+      };
+      document.addEventListener('keydown', onKeyDown, true);
+
+      setTimeout(() => btnProceed?.focus(), 0);
+    });
+  }
+
+  /* =========================
+     BAY PARSING
+  ========================= */
+  function getSelectedBay(selectEl) {
+    const opt = selectEl?.options?.[selectEl.selectedIndex];
+    const rawText = (opt?.textContent || '').trim();
+    const rawValue = (opt?.value || '').trim();
+
+    if (/select destination/i.test(rawText)) return '';
+
+    const mText = rawText.match(/\bDD(?:14|19|20|21|22)SD\b/i);
+    const mValue = rawValue.match(/\bDD(?:14|19|20|21|22)SD\b/i);
+
+    const picked = (mText?.[0] || mValue?.[0] || rawText || rawValue || '');
+    return normalize(picked);
+  }
+
+  function isLowHeightBay(bay) {
+    return LOW_HEIGHT_BAYS.includes(bay);
   }
 
   /* =========================
@@ -91,47 +390,66 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
     const dialogs = document.querySelectorAll(
       '[role="dialog"], .modal, .modal-dialog, .modal-content, .dialog, .popup'
     );
-
     for (const d of dialogs) {
-      if (d.querySelector('select[ng-model="destination"]')) {
-        log('Movement dialog found:', d);
-        return d;
-      }
+      if (d.querySelector('select[ng-model="destination"]')) return d;
     }
-
-    log('Movement dialog NOT found yet');
     return null;
   }
 
   function getSaveButton(dialogRoot) {
     const buttons = Array.from(dialogRoot.querySelectorAll('button'));
-    const btn = buttons.find(b =>
-      (b.textContent || '').trim().toLowerCase().includes('save')
-    );
-    log('Save button:', btn);
-    return btn;
+    return buttons.find(b => (b.textContent || '').trim().toLowerCase().includes('save')) || null;
   }
 
-  function storeOriginal(btn) {
+  /* =========================
+     VISUAL MODES (NO DISABLED TOGGLING)
+  ========================= */
+  function storeOriginalMarkup(btn) {
     if (!btn || btn.dataset.tmStored === '1') return;
     btn.dataset.tmStored = '1';
-    btn.dataset.tmOrigText = btn.textContent;
-    btn.dataset.tmOrigDisabled = btn.disabled ? '1' : '0';
+    btn.dataset.tmOrigHtml = btn.innerHTML;
   }
 
-  function restore(btn) {
-    log('Restoring Save button');
-    btn.disabled = btn.dataset.tmOrigDisabled === '1';
-    btn.textContent = btn.dataset.tmOrigText || SAVE_LABEL;
+  function restoreOriginal(btn) {
+    if (!btn) return;
+    if (btn.dataset.tmOrigHtml) btn.innerHTML = btn.dataset.tmOrigHtml;
     btn.classList.remove(BLOCKED_CLASS);
+    btn.classList.remove(WARN_CLASS);
+    btn.removeAttribute('title');
+    btn.dataset.tmMode = 'none';
   }
 
-  function block(btn) {
-    log('BLOCKING Save button');
-    storeOriginal(btn);
-    btn.disabled = true;
-    btn.textContent = BLOCKED_LABEL;
-    btn.classList.add(BLOCKED_CLASS);
+  function applyMode(btn, mode) {
+    if (!btn) return;
+    storeOriginalMarkup(btn);
+    restoreOriginal(btn);
+
+    if (mode === 'block') {
+      try {
+        const origHtml = btn.dataset.tmOrigHtml || btn.innerHTML || '';
+        const replaced = origHtml.replace(/\bSave\b/gi, BLOCKED_LABEL);
+        btn.innerHTML = replaced === origHtml ? origHtml : replaced;
+      } catch {
+        btn.textContent = BLOCKED_LABEL;
+      }
+      btn.classList.add(BLOCKED_CLASS);
+      btn.setAttribute('title', 'Restricted: VD Double Deck cannot be moved to low-height SD bays.');
+      btn.dataset.tmMode = 'block';
+      return;
+    }
+
+    if (mode === 'warn') {
+      try {
+        const origHtml = btn.dataset.tmOrigHtml || btn.innerHTML || '';
+        const replaced = origHtml.replace(/\bSave\b/gi, WARN_LABEL);
+        btn.innerHTML = replaced === origHtml ? origHtml : replaced;
+      } catch {
+        btn.textContent = WARN_LABEL;
+      }
+      btn.classList.add(WARN_CLASS);
+      btn.setAttribute('title', `Confirm: verify trailer height is lower than ${HEIGHT_LIMIT_TEXT} before moving into SD bay.`);
+      btn.dataset.tmMode = 'warn';
+    }
   }
 
   /* =========================
@@ -139,99 +457,136 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
   ========================= */
   function detectDoubleDeck(dialogRoot) {
     const dialogText = dialogRoot.innerText || '';
-    log('Dialog text snippet:', dialogText.slice(0, 300));
-
     let found = TRAILER_TYPE_MARKERS.some(m => dialogText.includes(m));
-    log('Double Deck detected in dialog?', found);
-
     if (!found) {
       const pageText = document.body.innerText || '';
       found = TRAILER_TYPE_MARKERS.some(m => pageText.includes(m));
-      log('Fallback: Double Deck detected in PAGE?', found);
     }
-
     return found;
   }
 
   /* =========================
-     TRAILER ID (VD*) DETECTION
+     TRAILER ID DETECTION (GENERAL)
   ========================= */
-  function extractTrailerId(dialogRoot) {
-  // Try to find the Id column cell specifically
-  const cells = Array.from(dialogRoot.querySelectorAll('td'));
-
-  for (const cell of cells) {
-    const text = (cell.textContent || '').trim().toUpperCase();
-
-    // Look for VD followed by numbers
-    if (/^VD\d+$/i.test(text)) {
-      return text;
+  function extractTrailerIdGeneral(dialogRoot) {
+    const checked = dialogRoot.querySelector('input[type="checkbox"]:checked');
+    if (checked) {
+      const tr = checked.closest('tr');
+      const tds = tr ? Array.from(tr.querySelectorAll('td')) : [];
+      const candidate = (tds[tds.length - 1]?.textContent || '').trim();
+      if (candidate) return candidate.toUpperCase();
     }
+
+    const rows = Array.from(dialogRoot.querySelectorAll('tr'));
+    for (const r of rows) {
+      const tds = Array.from(r.querySelectorAll('td'));
+      if (tds.length >= 3) {
+        const vehicleText = (tds[0].textContent || '').toLowerCase();
+        if (vehicleText.includes('trailer')) {
+          const candidate = (tds[tds.length - 1].textContent || '').trim();
+          if (candidate) return candidate.toUpperCase();
+        }
+      }
+    }
+
+    const txt = dialogRoot.innerText || '';
+    const m = txt.match(/\b[A-Z]{1,4}\d{3,}\b/i);
+    return m?.[0]?.toUpperCase() || '';
   }
 
-  // Fallback: search whole dialog text
-  const fallback = (dialogRoot.innerText || '').match(/\bVD\d+\b/i);
-  if (fallback) return fallback[0].toUpperCase();
-
-  return '';
-}
-
   function detectTrailerStartsWithPrefix(dialogRoot, prefix) {
-  const id = extractTrailerId(dialogRoot);
-  const result = id.startsWith(prefix.toUpperCase());
-
-  log('Trailer ID detected:', id || '(none)');
-  log(`Trailer starts with ${prefix}?`, result);
-
-  return { result, id };
-}
+    const id = extractTrailerIdGeneral(dialogRoot);
+    return { result: id.startsWith(prefix.toUpperCase()), id };
+  }
 
   /* =========================
      CORE BINDING
   ========================= */
   function bindRestrictions(dialogRoot) {
-    if (dialogRoot.dataset.tmBound === '1') {
-      log('Dialog already bound, skipping');
-      return;
-    }
-
+    if (dialogRoot.dataset.tmBound === '1') return;
     dialogRoot.dataset.tmBound = '1';
 
     const destinationSelect = dialogRoot.querySelector('select[ng-model="destination"]');
     const saveButton = getSaveButton(dialogRoot);
 
-    if (!destinationSelect || !saveButton) {
-      log('Missing destination select or save button');
-      return;
-    }
+    if (!destinationSelect || !saveButton) return;
 
-    storeOriginal(saveButton);
+    storeOriginalMarkup(saveButton);
+    let lastMode = null;
+
+    const compute = () => {
+      const bay = getSelectedBay(destinationSelect);
+      const isLow = isLowHeightBay(bay);
+
+      const isDoubleDeck = detectDoubleDeck(dialogRoot);
+      const idCheck = detectTrailerStartsWithPrefix(dialogRoot, TRAILER_ID_PREFIX);
+
+      const trailerId = idCheck.id || '';
+      const exempt = isExemptTrailer(trailerId);
+
+      const shouldBlock = exempt ? false : Boolean(isLow && isDoubleDeck && idCheck.result);
+      const shouldWarn = exempt ? false : Boolean(isLow && !shouldBlock);
+
+      saveButton.dataset.tmExempt = exempt ? '1' : '0';
+      saveButton.dataset.tmShouldBlock = shouldBlock ? '1' : '0';
+      saveButton.dataset.tmShouldWarn = shouldWarn ? '1' : '0';
+      saveButton.dataset.tmTrailer = trailerId;
+      saveButton.dataset.tmBay = bay || '';
+      saveButton.dataset.tmIsDoubleDeck = isDoubleDeck ? '1' : '0';
+
+      return { exempt, shouldBlock, shouldWarn };
+    };
 
     const applyRules = () => {
-      log('--- applyRules triggered ---');
+      const { exempt, shouldBlock, shouldWarn } = compute();
 
-      const bay = getSelectedBay(destinationSelect);
-      const restricted = isRestrictedBay(bay);
+      let mode = 'none';
+      if (!exempt) {
+        if (shouldBlock) mode = 'block';
+        else if (shouldWarn) mode = 'warn';
+      }
 
-      // Re-detect each time in case popup content updates dynamically
-      const isDoubleDeck = detectDoubleDeck(dialogRoot);
-      const vdCheck = detectTrailerStartsWithPrefix(dialogRoot, TRAILER_ID_PREFIX);
-
-      log('FINAL checks:', {
-        isDoubleDeck,
-        trailerId: vdCheck.id,
-        trailerPrefixOk: vdCheck.result,
-        restrictedBay: restricted
-      });
-
-      if (isDoubleDeck && vdCheck.result && restricted) {
-        block(saveButton);
-      } else {
-        restore(saveButton);
+      if (mode !== lastMode) {
+        lastMode = mode;
+        applyMode(saveButton, mode);
+      } else if (mode === 'none') {
+        restoreOriginal(saveButton);
       }
     };
 
     destinationSelect.addEventListener('change', applyRules);
+    destinationSelect.addEventListener('input', applyRules);
+    destinationSelect.addEventListener('click', applyRules);
+
+    saveButton.addEventListener('click', async (e) => {
+      const exempt = saveButton.dataset.tmExempt === '1';
+      const shouldBlock = saveButton.dataset.tmShouldBlock === '1';
+      const shouldWarn = saveButton.dataset.tmShouldWarn === '1';
+      const trailer = saveButton.dataset.tmTrailer || '(unknown)';
+      const bay = saveButton.dataset.tmBay || '(none)';
+
+      if (exempt) return;
+
+      if (shouldBlock) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+        return;
+      }
+
+      if (shouldWarn) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation?.();
+
+        const ok = await showHeightConfirmModal({ trailer, bay });
+        if (ok) {
+          saveButton.dataset.tmShouldWarn = '0';
+          setTimeout(() => saveButton.click(), 0);
+        }
+      }
+    }, true);
+
     applyRules();
   }
 
@@ -239,14 +594,13 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
      WATCHER (SHORT-LIVED)
   ========================= */
   function watchForDialogOnce() {
-    log('Starting dialog watcher');
-
     let stopped = false;
     let scheduled = false;
 
     const observer = new MutationObserver(() => {
       if (stopped || scheduled) return;
       scheduled = true;
+
       setTimeout(() => {
         scheduled = false;
         const dialog = findMovementDialogRoot();
@@ -254,26 +608,21 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
           bindRestrictions(dialog);
           observer.disconnect();
           stopped = true;
-          log('Dialog watcher stopped');
         }
       }, 50);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // immediate check
     const dialog = findMovementDialogRoot();
     if (dialog) {
       bindRestrictions(dialog);
       observer.disconnect();
-      log('Dialog watcher stopped (immediate)');
+      stopped = true;
     }
 
     setTimeout(() => {
-      if (!stopped) {
-        observer.disconnect();
-        log('Dialog watcher timeout stop');
-      }
+      if (!stopped) observer.disconnect();
     }, 8000);
   }
 
@@ -283,16 +632,11 @@ const BLOCKED_CLASS = 'tm-dd-blocked-save';
   document.body.addEventListener('click', (event) => {
     if (!isOnYardPage()) return;
     const btn = event.target.closest?.('.request-movement.highlight');
-    if (btn) {
-      log('Request movement clicked');
-      watchForDialogOnce();
-    }
+    if (btn) watchForDialogOnce();
   });
 
   /* =========================
      INIT
   ========================= */
   injectStyleOnce();
-  log('DEBUG script loaded');
-
 })();
