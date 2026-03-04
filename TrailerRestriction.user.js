@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Trailer move restriction - Block SD + Low-height confirm + VS exemptions
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
-// @description  Blocks VD* Double Deck moves to low-height SD bays; requires confirmation for other trailers into low-height bays; exempts VS40/VS42/VS43/VS44 from any restrictions.
+// @version      2.6.0
+// @description  Blocks VD* Double Deck moves to low-height SD bays; requires confirmation for other trailers into low-height bays; exempts VS40/VS42/VS43/VS44/VS48 from any restrictions.
 // @author       Valdemar Iliev (valdemai)
 // @match        https://trans-logistics-eu.amazon.com/*
 // @grant        none
@@ -35,7 +35,7 @@
   const TRAILER_ID_PREFIX = 'VD';
 
   // Exempt trailers: no restrictions/warnings apply (proceed as normal)
-  const EXEMPT_TRAILER_PREFIXES = ['VS40', 'VS42', 'VS43', 'VS44'];
+  const EXEMPT_TRAILER_PREFIXES = ['VS40', 'VS42', 'VS43', 'VS44', 'VS48'];
 
   // Visual classes
   const BLOCKED_CLASS = 'tm-dd-blocked-save'; // red
@@ -47,6 +47,10 @@
   // Styled confirm settings
   const HEIGHT_LIMIT_TEXT = '4.3 m';
   const HEIGHT_LIMIT_FT_TEXT = '14.1 ft'; // 4.3m ≈ 14.1ft
+
+  // AAP guidance
+  const AAP_URL = 'https://aap-eu.corp.amazon.com/';
+  const AMAZON_CARRIER_FOR_AAP = 'ATSUK'; // only show AAP instruction for this carrier
 
   function isOnYardPage() {
     return String(location.hash || '').includes(YARD_HASH);
@@ -83,7 +87,7 @@
         padding:16px;
       }
       .tm-modal{
-        width:min(560px, 96vw);
+        width:min(600px, 96vw);
         background:#fff;
         border-radius:18px;
         box-shadow:0 24px 70px rgba(0,0,0,.38);
@@ -190,6 +194,33 @@
         color:#111;
       }
 
+      /* Guidance box */
+      .tm-guidance{
+        margin-top:12px;
+        background:#fff;
+        border:1px solid rgba(0,0,0,.10);
+        border-radius:14px;
+        padding:12px 12px;
+        font-size:13px;
+        color:#111;
+      }
+      .tm-guidance-title{
+        font-weight:700;
+        margin:0 0 8px 0;
+        color:#111;
+      }
+      .tm-guidance ul{
+        margin:0;
+        padding-left:18px;
+        color:rgba(0,0,0,.80);
+        line-height:1.35;
+      }
+      .tm-guidance a{
+        color:#1673d6;
+        text-decoration:underline;
+        font-weight:600;
+      }
+
       /* Footer and buttons */
       .tm-modal-footer{
         padding:14px 20px 22px;
@@ -272,17 +303,32 @@
     return EXEMPT_TRAILER_PREFIXES.some(p => id.startsWith(p));
   }
 
+  function isAtsukCarrier(carrier) {
+    return String(carrier || '').trim().toUpperCase() === AMAZON_CARRIER_FOR_AAP;
+  }
+
   /* =========================
      CUSTOM CONFIRM MODAL
   ========================= */
   let tmModalOpen = false;
 
-  function showHeightConfirmModal({ trailer, bay }) {
+  function showHeightConfirmModal({ trailer, bay, carrier }) {
     return new Promise((resolve) => {
       if (tmModalOpen) return resolve(false);
       tmModalOpen = true;
 
       const bayNum = extractBayNumber(bay);
+      const trailerSafe = trailer || '(unknown)';
+      const baySafe = bay || '(none)';
+      const carrierSafe = carrier || '(unknown)';
+
+      const aapLine = isAtsukCarrier(carrierSafe)
+        ? `<li><b>ATSUK trailer:</b> confirm height using <a href="${AAP_URL}" target="_blank" rel="noopener noreferrer">AAP Tool</a>.</li>`
+        : '';
+
+      const thirdPartyLine = !isAtsukCarrier(carrierSafe)
+        ? `<li><b>3rd party / non-ATSUK:</b> confirm trailer height with the <b>YM</b> or <b>Shunter</b>.</li>`
+        : `<li>If AAP data is unavailable, confirm height with the <b>YM</b> or <b>Shunter</b>.</li>`;
 
       const backdrop = document.createElement('div');
       backdrop.className = 'tm-modal-backdrop';
@@ -320,8 +366,17 @@
               confirm the trailer you are moving is <strong>lower than ${HEIGHT_LIMIT_TEXT}</strong>.
             </div>
 
-            <div class="tm-info-row"><span>Trailer</span><span>${escapeHtml(trailer || '(unknown)')}</span></div>
-            <div class="tm-info-row"><span>Destination</span><span>${escapeHtml(bay || '(none)')}</span></div>
+            <div class="tm-info-row"><span>Trailer</span><span>${escapeHtml(trailerSafe)}</span></div>
+            <div class="tm-info-row"><span>Carrier</span><span>${escapeHtml(carrierSafe)}</span></div>
+            <div class="tm-info-row"><span>Destination</span><span>${escapeHtml(baySafe)}</span></div>
+          </div>
+
+          <div class="tm-guidance">
+            <p class="tm-guidance-title">How to confirm trailer height</p>
+            <ul>
+              ${aapLine}
+              ${thirdPartyLine}
+            </ul>
           </div>
         </div>
 
@@ -466,37 +521,56 @@
   }
 
   /* =========================
-     TRAILER ID DETECTION (GENERAL)
+     TRAILER + CARRIER DETECTION (ROBUST VIA COLUMN HEADERS)
   ========================= */
-  function extractTrailerIdGeneral(dialogRoot) {
-    const checked = dialogRoot.querySelector('input[type="checkbox"]:checked');
-    if (checked) {
-      const tr = checked.closest('tr');
-      const tds = tr ? Array.from(tr.querySelectorAll('td')) : [];
-      const candidate = (tds[tds.length - 1]?.textContent || '').trim();
-      if (candidate) return candidate.toUpperCase();
-    }
+  function extractTrailerInfo(dialogRoot) {
+    const tables = Array.from(dialogRoot.querySelectorAll('table'));
+    const table = tables.find(t => {
+      const txt = (t.innerText || '').toLowerCase();
+      return txt.includes('vehicle') && txt.includes('carrier') && txt.includes('id');
+    }) || tables.find(t => {
+      const txt = (t.innerText || '').toLowerCase();
+      return txt.includes('vehicle') && txt.includes('id');
+    });
 
-    const rows = Array.from(dialogRoot.querySelectorAll('tr'));
-    for (const r of rows) {
-      const tds = Array.from(r.querySelectorAll('td'));
-      if (tds.length >= 3) {
-        const vehicleText = (tds[0].textContent || '').toLowerCase();
-        if (vehicleText.includes('trailer')) {
-          const candidate = (tds[tds.length - 1].textContent || '').trim();
-          if (candidate) return candidate.toUpperCase();
-        }
-      }
-    }
+    if (!table) return { id: '', carrier: '' };
 
-    const txt = dialogRoot.innerText || '';
-    const m = txt.match(/\b[A-Z]{1,4}\d{3,}\b/i);
-    return m?.[0]?.toUpperCase() || '';
+    const headerRow = table.querySelector('tr');
+    const headerCells = headerRow ? Array.from(headerRow.querySelectorAll('th, td')) : [];
+    const norm = (x) => (x || '').trim().toLowerCase();
+
+    let idIdx = headerCells.findIndex(c => norm(c.textContent) === 'id');
+    if (idIdx < 0) idIdx = headerCells.findIndex(c => norm(c.textContent).includes('id'));
+
+    let carrierIdx = headerCells.findIndex(c => norm(c.textContent) === 'carrier');
+    if (carrierIdx < 0) carrierIdx = headerCells.findIndex(c => norm(c.textContent).includes('carrier'));
+
+    // Prefer checked row
+    let row = null;
+    const checked = table.querySelector('input[type="checkbox"]:checked');
+    if (checked) row = checked.closest('tr');
+
+    // Fallback: first data row that looks like a trailer row
+    if (!row) {
+      const rows = Array.from(table.querySelectorAll('tr')).slice(1);
+      row = rows.find(r => (r.innerText || '').toLowerCase().includes('trailer')) || null;
+    }
+    if (!row) return { id: '', carrier: '' };
+
+    const cells = Array.from(row.querySelectorAll('td, th'));
+    const rawId = idIdx >= 0 ? (cells[idIdx]?.textContent || '').trim() : '';
+    const rawCarrier = carrierIdx >= 0 ? (cells[carrierIdx]?.textContent || '').trim() : '';
+
+    return {
+      id: rawId ? rawId.toUpperCase() : '',
+      carrier: rawCarrier ? rawCarrier.toUpperCase() : ''
+    };
   }
 
   function detectTrailerStartsWithPrefix(dialogRoot, prefix) {
-    const id = extractTrailerIdGeneral(dialogRoot);
-    return { result: id.startsWith(prefix.toUpperCase()), id };
+    const info = extractTrailerInfo(dialogRoot);
+    const id = info.id || '';
+    return { result: id.startsWith(prefix.toUpperCase()), id, carrier: info.carrier || '' };
   }
 
   /* =========================
@@ -521,7 +595,8 @@
       const isDoubleDeck = detectDoubleDeck(dialogRoot);
       const idCheck = detectTrailerStartsWithPrefix(dialogRoot, TRAILER_ID_PREFIX);
 
-      const trailerId = idCheck.id || '';
+      const trailerId = (idCheck.id || '').toUpperCase();
+      const carrier = (idCheck.carrier || '').toUpperCase();
       const exempt = isExemptTrailer(trailerId);
 
       const shouldBlock = exempt ? false : Boolean(isLow && isDoubleDeck && idCheck.result);
@@ -531,6 +606,7 @@
       saveButton.dataset.tmShouldBlock = shouldBlock ? '1' : '0';
       saveButton.dataset.tmShouldWarn = shouldWarn ? '1' : '0';
       saveButton.dataset.tmTrailer = trailerId;
+      saveButton.dataset.tmCarrier = carrier;
       saveButton.dataset.tmBay = bay || '';
       saveButton.dataset.tmIsDoubleDeck = isDoubleDeck ? '1' : '0';
 
@@ -563,6 +639,7 @@
       const shouldBlock = saveButton.dataset.tmShouldBlock === '1';
       const shouldWarn = saveButton.dataset.tmShouldWarn === '1';
       const trailer = saveButton.dataset.tmTrailer || '(unknown)';
+      const carrier = saveButton.dataset.tmCarrier || '';
       const bay = saveButton.dataset.tmBay || '(none)';
 
       if (exempt) return;
@@ -579,7 +656,7 @@
         e.stopPropagation();
         e.stopImmediatePropagation?.();
 
-        const ok = await showHeightConfirmModal({ trailer, bay });
+        const ok = await showHeightConfirmModal({ trailer, bay, carrier });
         if (ok) {
           saveButton.dataset.tmShouldWarn = '0';
           setTimeout(() => saveButton.click(), 0);
